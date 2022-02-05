@@ -1,0 +1,50 @@
+datasource db {
+  provider = "mongodb"
+  url      = "mongodb+srv://dietai:dietai@cluster0.43xkj.mongodb.net/myFirstDatabase?retryWrites=true&w=majority"
+}
+
+generator client {
+  provider = "prisma-client-py"
+  previewFeatures = ["mongoDb"]
+}
+
+model Interaccion {
+  id         String  @id @default(dbgenerated()) @map("_id") @db.ObjectId
+  puntuacion Float
+  usuario    Usuario @relation(fields: [usuarioId], references: [id])
+  usuarioId  Int
+  receta     Recetas @relation(fields: [recetaId], references: [id])
+  recetaId   Int
+}
+
+model Usuario {
+  id                   String                 @id @default(dbgenerated()) @map("_id") @db.ObjectId
+  nombre               String                 @unique
+  inter                Interaccion[]
+  IngredientesDespensa IngredientesDespensa[]
+  limiteCalorias       Float?
+}
+
+model Recetas {
+  id           String         @id @default(dbgenerated()) @map("_id") @db.ObjectId
+  nombre       String
+  calorias     Float?
+  inter        Interaccion[]
+  ingredientes Ingredientes[] @relation(references: [id])
+}
+
+model Ingredientes {
+  id                   String                 @id @default(dbgenerated()) @map("_id") @db.ObjectId
+  name                 String                 @unique
+  Recetas              Recetas[]              @relation(references: [id])
+  IngredientesDespensa IngredientesDespensa[]
+}
+
+model IngredientesDespensa {
+  id             String       @id @default(dbgenerated()) @map("_id") @db.ObjectId
+  cantidad       Int          @default(0)
+  usuario        Usuario      @relation(fields: [usuarioId], references: [id])
+  usuarioId      Int
+  Ingrediente    Ingredientes @relation(fields: [ingredientesId], references: [id])
+  ingredientesId Int
+}
