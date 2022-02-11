@@ -1,6 +1,6 @@
 datasource db {
-  provider = "mysql"
-  url      = "mysql://root:1234asdf@localhost:3306/dietas"
+  provider = "postgres"
+  url      = "postgresql://postgres:1234asdf@localhost:5555/postgres"
 }
 
 generator client {
@@ -22,13 +22,17 @@ model Usuario {
   inter                Interaccion[]
   IngredientesDespensa IngredientesDespensa[]
   limiteCalorias       Float?
+  trained              Boolean                @default(false)
 }
 
 model Recetas {
-  id           Int            @id @default(autoincrement())
+  id           Int            @id 
   nombre       String
   calorias     Float?
   inter        Interaccion[]
+  minutes      Int
+  description  String?
+  steps        String[]
   ingredientes Ingredientes[] @relation(references: [id])
 }
 
@@ -40,10 +44,11 @@ model Ingredientes {
 }
 
 model IngredientesDespensa {
-  id             Int          @id @default(autoincrement())
   cantidad       Int          @default(0)
   usuario        Usuario      @relation(fields: [usuarioId], references: [id])
   usuarioId      Int
   Ingrediente    Ingredientes @relation(fields: [ingredientesId], references: [id])
   ingredientesId Int
+
+  @@id([usuarioId, ingredientesId])
 }
