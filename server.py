@@ -67,7 +67,7 @@ async def shutdown() -> None:
 
 
 @app.get("/recetas")
-async def getdbase(cantidad: int = 10)->list:
+async def getdbase(cantidad: int = Query(10,ge=1, le=100))->list:
 
     # recetas = await client.recetas.find_many(where={"id": {"in":}})
     recetas = await client.query_raw(
@@ -76,7 +76,7 @@ async def getdbase(cantidad: int = 10)->list:
                       from "Interaccion" 
                       GROUP BY "recetaId" 
                       ORDER BY total desc
-                      LIMIT 1000
+                      LIMIT 500
                      )
         select r.*
         from "Recetas" r join users_receta i Using(id)
