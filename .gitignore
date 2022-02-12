@@ -6,7 +6,9 @@ __pycache__/
 *.model
 # C extensions
 *.so
-
+.env
+*.pickle
+cred.json
 # Distribution / packaging
 .Python
 build/

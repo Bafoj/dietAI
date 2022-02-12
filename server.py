@@ -1,29 +1,56 @@
+import operator
+import os
+import re
+import string
+from itertools import islice
 from random import sample
 from typing import Optional
-from fastapi import FastAPI, Query, HTTPException, UploadFile
+
+import gensim
+import numpy as np
+import spacy
+from fastapi import FastAPI, HTTPException, Query, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from gensim.models import LsiModel, TfidfModel
+from google.cloud import vision
+from google.oauth2 import service_account
+from numpy.linalg import norm
 from prisma import Client
 from prisma.models import Recetas, Usuario
 from prisma.types import RecetasWhereInput
 from surprise import SVD
 from surprise.dump import load
-from itertools import islice
-import io
-import os
-from google.oauth2 import service_account
-from google.cloud import vision
-import numpy as np
-from numpy.linalg import norm
 
 app = FastAPI(title="API NutridAIet")
 client = Client(auto_register=True)
 
 
-cred = os.path.abspath("igneous-bond-254520-d57c8039f85d.json")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+    "*"
+],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+cred = os.path.abspath("cred.json")
 credentials = service_account.Credentials.from_service_account_file(cred)
 google = vision.ImageAnnotatorClient(credentials=credentials)
+spacy_nlp = spacy.load('en_core_web_sm')
+punctuations = string.punctuation
+stop_words = spacy.lang.en.stop_words.STOP_WORDS #type: ignore
 
 
 recommender: Optional[SVD] = load("recomida.model")[1]
+
+dictionary = gensim.utils.SaveLoad.load('NLP/dictionary')
+food_lsi_model = LsiModel.load('NLP/lsi')
+##food_lsi_projection = gensim.utils.SaveLoad.load('lsi.projection')
+food_tfidf_model = TfidfModel.load('NLP/tfidf')
+food_index = gensim.utils.SaveLoad.load('NLP/food_index')
 
 
 @app.on_event("startup")
@@ -40,24 +67,25 @@ async def shutdown() -> None:
 
 
 @app.get("/recetas")
-async def getdbase(cantidad: int = 10) -> list[Recetas]:
+async def getdbase(cantidad: int = 10)->list:
 
     # recetas = await client.recetas.find_many(where={"id": {"in":}})
-    return await client.query_raw(
+    recetas = await client.query_raw(
         """
         WITH users_receta as (SELECT "recetaId" as id, COUNT(*) as total
                       from "Interaccion" 
                       GROUP BY "recetaId" 
                       ORDER BY total desc
-                      LIMIT $1
+                      LIMIT 1000
                      )
         select r.*
         from "Recetas" r join users_receta i Using(id)
         WHERE r.description IS NOT NULL;
         """,
-        cantidad,
         model=Recetas,
     )
+
+    return sample(recetas, min(cantidad, len(recetas)))
 
 
 @app.post("/new_interaction")
@@ -179,8 +207,8 @@ async def get_pantry(username: str):
 
 
 @app.post("/pantry")
-async def post_pantry(username: str, ingredientId: int, cantidad: int):
-    user = await client.usuario.find_first(where={"nombre": username})
+async def post_pantry(username: int, ingredientId: int, cantidad: int):
+    user = await client.usuario.find_first(where={"id": username})
     if not user:
         return HTTPException(404, f"Usuario con nombre {username} no encontrado")
 
@@ -213,9 +241,72 @@ async def post_pantry(username: str, ingredientId: int, cantidad: int):
 
 
 @app.post("/pantry/ticket")
-async def post_ticket(username: str, file: UploadFile):
+async def post_ticket(user: int, file: UploadFile):
+    
     content = await file.read()
     image = vision.Image(content=content)
     response = google.text_detection(image=image) #type: ignore
     texts = response.text_annotations
-    return texts[0].description
+    words = spacy_tokenizer(texts[0].description) 
+    food_list = []
+    for word in words:
+        similar = search_similar_food(word)
+        if len(similar) > 0:
+            await client.ingredientesdespensa.upsert(
+                where={
+                    "usuarioId_ingredientesId": {
+                        "usuarioId": user,
+                        "ingredientesId": similar[0],
+                    }
+                },
+                data={
+                    "create": {
+                        "cantidad": 1,
+                        "usuario": {"connect": {"id": user}},
+                        "Ingrediente": {"connect": {"id": similar[0]}},
+                    },
+                    "update": {"cantidad": 1},
+                },
+            )
+    usuario = await client.usuario.find_first(where={"id": user}, include={"IngredientesDespensa": {"include": {"Ingrediente": True}}})
+
+    if usuario == None:
+        return HTTPException(404, "Usuario no encontrado")
+
+    return usuario.IngredientesDespensa
+
+def spacy_tokenizer(sentence):
+    sentence = re.sub('\'','',sentence)
+    sentence = re.sub('\w*\d\w*','',sentence)
+    sentence = re.sub(' +',' ',sentence)
+    sentence = re.sub(r'\n: \'\'.*','',sentence)
+    sentence = re.sub(r'\n!.*','',sentence)
+    sentence = re.sub(r'^:\'\'.*','',sentence)
+    sentence = re.sub(r'\n',' ',sentence)
+    sentence = re.sub(r'[^\w\s]',' ',sentence)
+    tokens = spacy_nlp(sentence)
+    tokens = [word.lemma_.lower().strip() if word.lemma_ != "-PRON-" else word.lower_ for word in tokens]
+    tokens = [word for word in tokens if word not in stop_words and word not in punctuations and len(word) > 2]
+    return tokens
+
+def search_similar_food(search_term):
+
+    query_bow = dictionary.doc2bow(spacy_tokenizer(search_term))
+    query_tfidf = food_tfidf_model[query_bow]
+    query_lsi = food_lsi_model[query_tfidf]
+
+    food_index.num_best = 1
+
+    food_list = food_index[query_lsi]
+
+    food_list.sort(key=operator.itemgetter(1), reverse=True)
+    food_names = []
+
+    for j, food in enumerate(food_list):
+
+        food_names.append(int(food[0]))
+
+        if j == (food_index.num_best-1):
+            break
+    return food_names
+    #return pd.DataFrame(food_names, columns=['Relevance','Food ingredient','Food Plot'])
